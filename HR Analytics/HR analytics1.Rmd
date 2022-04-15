@@ -1,0 +1,299 @@
+---
+title: "HR Analytics"
+author: "Rutika Shetye/Devang Shetye"
+date: '2022-04-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+###Loading Libraries....
+```{r , fig.width=4, fig.height=4}
+library(lattice)  # Used for Data Visualization
+require(caret)    # for data pre-processing
+require(pROC)     # for ROC Curves
+library(ipred)    # for bagging and  k fold cv
+library(e1071)    # for SVM
+```
+
+###Let us read the data
+
+```{r , fig.width=4, fig.height=4}
+data <- read.csv("C:/Users/SKY/Desktop/College Stuff/R LAB/HR_comma_sep.csv")
+head(data)
+summary(data)
+```
+
+###Convert sales and salary to factor
+```{r , fig.width=4, fig.height=4}
+data$sales<-as.factor(data$sales)
+data$salary<-as.factor(data$salary)
+data$salary<-ordered(data$salary,levels=c("low","medium","high"))
+```
+
+##Data Visualization
+
+### Now let's plot the Correlation Plot
+syntax for corrplot : https://cran.r-project.org/web/packages/corrplot/corrplot.pdf
+
+```{r , fig.width=4, fig.height=4}
+library(corrplot)
+cor(data[,1:8])
+corrplot(cor(data[,1:8]), method="circle")
+```
+
+### Plotting some box plots
+syntax for ggplot : https://cran.r-project.org/web/packages/ggplot2/ggplot2.pdf
+### Class 1 refers to people who left the company
+
+```{r , fig.width=4, fig.height=4}
+ggplot(data, aes(x =  salary, y = satisfaction_level, fill = factor(left), colour = factor(left))) + 
+geom_boxplot(outlier.colour = "black") + xlab("Salary") + ylab("Satisfacion level") 
+
+ggplot(data, aes(x =  salary, y = time_spend_company, fill = factor(left), colour = factor(left))) + 
+geom_boxplot(outlier.colour = NA) + xlab("Salary") + ylab("time_spend_company") 
+
+ggplot(data, aes(x =  factor(time_spend_company), y = average_montly_hours, fill = factor(left), colour = factor(left))) + 
+  geom_boxplot(outlier.colour = NA) + xlab("Time spend Company") + ylab("Average Monthly Hours") 
+
+```
+
+#Observations :
+#### * Boxplot between Time Spent in Company and Salary :  In the dataset we find that the people leaving are more experienced (i.e. higher time spent in company on average) in the low and medium salary class.
+#### * Boxplot between Satisfaction levels and Salary : In the dataset we find that the average satisfaction of the employees who left is lower than who haven't left
+#### * Boxplot between Average Monthly Hours and Time spent Company: In the dataset we find that the people leaving have spent more hours at work
+
+#Conclusion :
+###Common traits of Good people leaving :
+#### * Experienced                  
+#### * Very low satisfaction levels                 
+#### * Spend more time at work
+
+###Possible Reasons for people leaving: 
+#### * Experienced people may not be finding any challenges in work. Hence they leave.
+#### * Work to Pay ratio may be high (because we find clear correlation only in low and medium salary ranges)
+
+
+
+#Now let us predict who is leaving and who is not
+
+###Splitting the data into training and test datasets
+Syntax for createDataPartition : createDataPartition(target variable, proportion for training set)
+https://www.rdocumentation.org/packages/caret/versions/6.0-73/topics/createDataPartition
+
+```{r , fig.width=4, fig.height=4}
+library(caret)
+set.seed(1234)
+splitIndex <- createDataPartition(data$left, p = .80,list = FALSE, times = 1)
+trainSplit <- data[ splitIndex,]
+testSplit <- data[-splitIndex,]
+print(table(trainSplit$left))
+```
+
+####Syntax for the cross validation and train routine in r :
+http://topepo.github.io/caret/model-training-and-tuning.html
+http://search.r-project.org/library/caret/html/trainControl.html
+
+#### Various options for the method parameter in train function :
+https://topepo.github.io/caret/available-models.html
+http://topepo.github.io/caret/train-models-by-tag.html
+
+
+###Now let's try leftification models
+
+### Logistic regression
+```{r, fig.width=4, fig.height=4}
+library(LogicReg)
+ctrl <- trainControl(method = "cv", number = 5)
+modelglm <- train(as.factor(left) ~. , data = trainSplit, method = "glm", trControl = ctrl)
+summary(modelglm)
+
+### predict
+predictors <- names(trainSplit)[names(trainSplit) != 'left']
+predglm <- predict(modelglm, testSplit)
+summary(predglm)
+
+### score prediction using AUC
+confusionMatrix(predglm, as.factor(testSplit$left))
+aucglm <- roc(as.numeric(testSplit$left), as.numeric(predglm),  ci=TRUE)
+plot(aucglm, ylim=c(0,1), print.thres=TRUE, main=paste('Logistic Regression AUC:',round(aucglm$auc[[1]],3)),col = 'blue')
+```
+
+
+
+
+### Random Forest
+```{r, fig.width=4, fig.height=4}
+library(randomForest)
+modelrf <- randomForest(as.factor(left) ~. , data = trainSplit)
+importance(modelrf)
+
+### predict
+predrf <- predict(modelrf,testSplit)
+summary(predrf)
+
+### score prediction using AUC
+confusionMatrix(predrf,as.factor(testSplit$left))
+library(pROC)
+aucrf <- roc(as.numeric(testSplit$left), as.numeric(predrf),  ci=TRUE)
+plot(aucrf, ylim=c(0,1), print.thres=TRUE, main=paste('Random Forest AUC:',round(aucrf$auc[[1]],3)),col = 'blue')
+```
+
+
+
+
+
+##Comparing all the ROC Curves
+```{r , fig.width=10, fig.height=4}
+library(ggplot2)
+plot(aucrf, ylim=c(0,1), main=paste('ROC Comparison : RF(blue),Logistic(Green)'),col = 'blue')
+par(new = TRUE)
+plot(aucglm,col = "red")
+```
+
+
+#### Clearly, we find Random Forest is performing well. Therefore, we'll continue ahead with Random Forest
+
+### Feature Engineering
+
+```{r , fig.width=4, fig.height=4}
+# The importance routine in r for random forest models gives us the mean decrease gini value. Higher the Mean Decrease Gini value, more important the variable.
+importance(modelrf)
+```
+#### Let's remove them least important variable and build the model with the remaining parameters and check the performance and repeat the process. Stop the process when there is a significant decrease in the performance measures
+
+### Random Forest After Feature Engineering
+```{r , fig.width=4, fig.height=4}
+modelrf2 <- randomForest(as.factor(left) ~.-promotion_last_5years-Work_accident-salary-sales , data = trainSplit)
+importance(modelrf2)
+
+### predict
+predrf2 <- predict(modelrf2,testSplit)
+summary(predrf2)
+
+### score prediction using AUC
+confusionMatrix(predrf2,as.factor(testSplit$left))
+library(pROC)
+aucrf2 <- roc(as.numeric(testSplit$left), as.numeric(predrf2),  ci=TRUE)
+plot(aucrf2, ylim=c(0,1), print.thres=TRUE, main=paste('Random Forest AUC:',round(aucrf2$auc[[1]],3)),col = 'blue')
+```
+#### * On observing the Mean Decrease Gini for each variable, we find variables 'promotion_last_5years', 'Work_accident', 'salary' and 'sales' are has the least value.
+#### * So if we remove 'promotion_last_5years', 'Work_accident', 'salary' and 'sales' one by one and build the model again, there is only a small change  in the AUC and other parameters 
+#### * But if we remove any other variable after that and repeat the process, all the performance have a significant decrease
+
+###The Problem Statement is : Why are the best and most experienced employees leaving prematurely ?
+
+####So let's define who are the best and most experienced employees..        (above average)
+
+
+####Last Evaluation >= 0.75
+####time_spend_company >= 4
+####number_project >= 5
+
+###Now let us subset them
+```{r , fig.width=4, fig.height=4}
+
+gp <- data[data$last_evaluation >= 0.75 & data$number_project >= 5 & data$time_spend_company >= 4,]
+nrow(gp)
+```
+
+### Correlation Plot with the subsetted data
+```{r , fig.width=4, fig.height=4}
+library(corrplot)
+gp1 <- gp[,1:6 ]
+gp1 <- cbind(gp1,gp[,8:10])
+cor(gp[,1:7])
+corrplot(cor(gp1[,1:7]), method="circle")
+```
+
+
+
+#Let's now repeat the entire process using Good people data
+
+```{r , fig.width=4, fig.height=4}
+set.seed(1234)
+splitIndex <- createDataPartition(gp$left, p = .80, list = FALSE, times = 1)
+trainSplit <- gp[splitIndex,]
+testSplit <- gp[-splitIndex,]
+print(table(trainSplit$left))
+```
+
+
+### Logistic regression
+```{r, fig.width=4, fig.height=4}
+library(survival)
+library(LogicReg)
+library(mcbiopi)
+ctrl <- trainControl(method = "cv", number = 5)
+modelglm <- train(as.factor(left) ~. , data = trainSplit, method = "glm", trControl = ctrl)
+summary(modelglm)
+
+### predict
+predictors <- names(trainSplit)[names(trainSplit) != 'left']
+predglm <- predict(modelglm, testSplit)
+summary(predglm)
+
+### score prediction using AUC
+confusionMatrix(predglm, as.factor(testSplit$left))
+aucglm <- roc(as.numeric(testSplit$left), as.numeric(predglm),  ci=TRUE)
+plot(aucglm, ylim=c(0,1), print.thres=TRUE, main=paste('Logistic Regression AUC:',round(aucglm$auc[[1]],3)),col = 'blue')
+```
+
+
+
+
+### Random Forest
+```{r, fig.width=4, fig.height=4}
+library(randomForest)
+modelrf <- randomForest(as.factor(left) ~. , data = trainSplit)
+importance(modelrf)
+
+### predict
+predrf <- predict(modelrf,testSplit)
+summary(predrf)
+
+### score prediction using AUC
+confusionMatrix(predrf,as.factor(testSplit$left))
+library(pROC)
+aucrf <- roc(as.numeric(testSplit$left), as.numeric(predrf),  ci=TRUE)
+plot(aucrf, ylim=c(0,1), print.thres=TRUE, main=paste('Random Forest AUC:',round(aucrf$auc[[1]],3)),col = 'blue')
+```
+
+
+
+##Comparison of ROC Curves
+```{r , fig.width=10, fig.height=4}
+library(ggplot2)
+plot(aucrf, ylim=c(0,1), main=paste('ROC Comparison : RF(blue),Logistic(Green)'),col = 'blue')
+par(new = TRUE)
+plot(aucglm,col = "red")
+```
+
+
+#### Clearly, we find Random Forest is performing well. Therefore, we'll continue ahead with Random Forest
+
+### Feature Engineering
+
+```{r , fig.width=4, fig.height=4}
+importance(modelrf)
+```
+
+### Random Forest After Feature Engineering
+```{r , fig.width=4, fig.height=4}
+modelrf2 <- randomForest(as.factor(left) ~.-promotion_last_5years-Work_accident-salary-sales , data = trainSplit)
+importance(modelrf2)
+
+### predict
+predrf2 <- predict(modelrf2,testSplit)
+summary(predrf2)
+
+### score prediction using AUC
+confusionMatrix(predrf2,as.factor(testSplit$left))
+library(pROC)
+aucrf2 <- roc(as.numeric(testSplit$left), as.numeric(predrf2),  ci=TRUE)
+plot(aucrf2, ylim=c(0,1), print.thres=TRUE, main=paste('Random Forest AUC:',round(aucrf2$auc[[1]],3)),col = 'blue')
+```
+
+
+####On observing the Mean Decrease Gini for each variable, we find variables 'promotion_last_5years', 'Work_accident', 'salary' and 'sales' are has the least value. So if we remove 'promotion_last_5years', 'Work_accident', 'salary' and 'sales' one by one and build the model again, there is only a small change  in the AUC and other parameters . But if we remove any other variable after that and repeat the process, all the performance have a significant decrease
